@@ -1,12 +1,12 @@
 use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use eframe::egui;
 use egui::Image;
-use egui_plot::{Bar, BarChart, Legend, Plot};
+use egui_plot::{Bar, BarChart, Legend, Line, Plot};
 use std::collections::HashMap;
 
 use crate::{
     database::Database,
-    models::{Direction, MoneyType, Person, PersonStats, Transaction},
+    models::{Direction, MoneyType, Person, PersonStats, SortBy, Transaction},
 };
 
 #[derive(PartialEq)]
@@ -39,6 +39,9 @@ pub struct BankingApp {
     status_message: String,
 
     pub logo_texture: Option<egui::TextureHandle>,
+
+    search_query: String,
+    sort_by: SortBy,
 }
 
 impl Default for BankingApp {
@@ -58,6 +61,8 @@ impl Default for BankingApp {
             current_tab: Tab::AddTransaction,
             status_message: String::new(),
             logo_texture: None,
+            search_query: String::new(),
+            sort_by: SortBy::DateNewest,
         }
     }
 }
@@ -65,458 +70,930 @@ impl Default for BankingApp {
 impl eframe::App for BankingApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(tex) = &self.logo_texture {
-                    ui.add(Image::new(tex).fit_to_exact_size(egui::vec2(32.0, 32.0)));
-                } else {
-                    ui.heading("💰");
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    if let Some(tex) = &self.logo_texture {
+                        ui.add(Image::new(tex).fit_to_exact_size(egui::vec2(40.0, 40.0)));
+                    } else {
+                        ui.heading("💰");
+                    }
+                    ui.heading(
+                        egui::RichText::new("Shalom, let's track some goyim!")
+                            .size(28.0)
+                            .strong(),
+                    );
+                    ui.heading("💰💸💰");
+                });
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.add_space(10.0);
+
+                ui.horizontal(|ui| {
+                    let available = ui.available_width();
+                    let total_btn_width = 450.0;
+                    let margin = (available - total_btn_width) / 2.0;
+                    ui.add_space(margin);
+
+                    let btn_style = |selected: bool| -> egui::Button {
+                        let color = if selected {
+                            egui::Color32::from_rgb(100, 150, 255)
+                        } else {
+                            egui::Color32::from_rgb(60, 80, 120)
+                        };
+                        let text_color = egui::Color32::WHITE;
+
+                        egui::Button::new(
+                            egui::RichText::new("➕ Add Transaction")
+                                .size(14.0)
+                                .color(text_color)
+                                .strong(),
+                        )
+                        .fill(color)
+                        .min_size([140.0, 40.0].into())
+                    };
+
+                    if ui
+                        .add(btn_style(self.current_tab == Tab::AddTransaction))
+                        .clicked()
+                    {
+                        self.current_tab = Tab::AddTransaction;
+                    }
+
+                    let btn_style = |selected: bool| -> egui::Button {
+                        let color = if selected {
+                            egui::Color32::from_rgb(100, 200, 100)
+                        } else {
+                            egui::Color32::from_rgb(60, 120, 60)
+                        };
+                        let text_color = egui::Color32::WHITE;
+
+                        egui::Button::new(
+                            egui::RichText::new("📊 Analysis")
+                                .size(14.0)
+                                .color(text_color)
+                                .strong(),
+                        )
+                        .fill(color)
+                        .min_size([140.0, 40.0].into())
+                    };
+
+                    if ui
+                        .add(btn_style(self.current_tab == Tab::Analysis))
+                        .clicked()
+                    {
+                        self.current_tab = Tab::Analysis;
+                    }
+
+                    let btn_style = |selected: bool| -> egui::Button {
+                        let color = if selected {
+                            egui::Color32::from_rgb(255, 150, 100)
+                        } else {
+                            egui::Color32::from_rgb(150, 90, 60)
+                        };
+                        let text_color = egui::Color32::WHITE;
+
+                        egui::Button::new(
+                            egui::RichText::new("📝 History")
+                                .size(14.0)
+                                .color(text_color)
+                                .strong(),
+                        )
+                        .fill(color)
+                        .min_size([140.0, 40.0].into())
+                    };
+
+                    if ui
+                        .add(btn_style(self.current_tab == Tab::Transactions))
+                        .clicked()
+                    {
+                        self.current_tab = Tab::Transactions;
+                    }
+                });
+
+                ui.add_space(15.0);
+                ui.separator();
+                ui.add_space(15.0);
+
+                match self.current_tab {
+                    Tab::AddTransaction => self.show_add_transaction(ui),
+                    Tab::Analysis => self.show_analysis(ui),
+                    Tab::Transactions => self.show_transactions(ui),
                 }
-                ui.heading("Shalom, let's track some goyim!");
-                ui.heading("💰👃💰");
             });
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.selectable_value(
-                    &mut self.current_tab,
-                    Tab::AddTransaction,
-                    "Add Transaction",
-                );
-                ui.selectable_value(&mut self.current_tab, Tab::Analysis, "Analysis");
-                ui.selectable_value(
-                    &mut self.current_tab,
-                    Tab::Transactions,
-                    "View Transactions",
-                );
-            });
-
-            ui.separator();
-
-            match self.current_tab {
-                Tab::AddTransaction => self.show_add_transaction(ui),
-                Tab::Analysis => self.show_analysis(ui),
-                Tab::Transactions => self.show_transactions(ui),
-            }
         });
     }
 }
 
 impl BankingApp {
     fn show_add_transaction(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Add New Transaction");
-        ui.add_space(10.0);
+        ui.vertical_centered(|ui| {
+            ui.add_space(20.0);
+            ui.heading(
+                egui::RichText::new("Add New Transaction")
+                    .size(24.0)
+                    .strong(),
+            );
+            ui.add_space(20.0);
 
-        egui::Grid::new("transaction_form")
-            .num_columns(2)
-            .spacing([40.0, 8.0])
-            .show(ui, |ui| {
-                ui.label("Person:");
-                ui.text_edit_singleline(&mut self.person_name);
-                ui.end_row();
+            let max_width = 500.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(max_width, ui.available_height()),
+                egui::Layout::top_down_justified(egui::Align::Center),
+                |ui| {
+                    egui::Grid::new("transaction_form")
+                        .num_columns(2)
+                        .spacing([40.0, 15.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("👤 Person:").size(14.0));
+                            ui.text_edit_singleline(&mut self.person_name);
+                            ui.end_row();
 
-                ui.label("Amount:");
-                ui.text_edit_singleline(&mut self.amount);
-                ui.end_row();
+                            ui.label(egui::RichText::new("💵 Amount:").size(14.0));
+                            ui.text_edit_singleline(&mut self.amount);
+                            ui.end_row();
 
-                ui.label("Currency:");
-                egui::ComboBox::from_id_source("money_type")
-                    .selected_text(format!("{:?}", self.money_type))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.money_type, MoneyType::GEL, "GEL");
-                        ui.selectable_value(&mut self.money_type, MoneyType::USD, "USD");
-                        ui.selectable_value(&mut self.money_type, MoneyType::EUR, "EUR");
-                        ui.selectable_value(&mut self.money_type, MoneyType::GBP, "GBP");
-                        ui.selectable_value(&mut self.money_type, MoneyType::RUB, "RUB");
-                        ui.selectable_value(&mut self.money_type, MoneyType::Other, "Other");
-                    });
-                ui.end_row();
+                            ui.label(egui::RichText::new("💱 Currency:").size(14.0));
+                            egui::ComboBox::from_id_source("money_type")
+                                .selected_text(format!("{:?}", self.money_type))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::GEL,
+                                        "GEL",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::USD,
+                                        "USD",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::EUR,
+                                        "EUR",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::GBP,
+                                        "GBP",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::RUB,
+                                        "RUB",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.money_type,
+                                        MoneyType::Other,
+                                        "Other",
+                                    );
+                                });
+                            ui.end_row();
 
-                ui.label("Direction:");
-                egui::ComboBox::from_id_source("direction")
-                    .selected_text(format!("{:?}", self.direction))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.direction, Direction::Lent, "Lent (I gave)");
-                        ui.selectable_value(
-                            &mut self.direction,
-                            Direction::Borrowed,
-                            "Borrowed (I received)",
-                        );
-                        ui.selectable_value(
-                            &mut self.direction,
-                            Direction::Returned,
-                            "Returned (They gave back)",
-                        );
-                        ui.selectable_value(
-                            &mut self.direction,
-                            Direction::Repaid,
-                            "Repaid (I gave back)",
-                        );
-                    });
-                ui.end_row();
+                            ui.label(egui::RichText::new("📄 Direction:").size(14.0));
+                            egui::ComboBox::from_id_source("direction")
+                                .selected_text(format!("{:?}", self.direction))
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut self.direction,
+                                        Direction::Lent,
+                                        "Lent (I gave)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.direction,
+                                        Direction::Borrowed,
+                                        "Borrowed (I received)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.direction,
+                                        Direction::Returned,
+                                        "Returned (They gave back)",
+                                    );
+                                    ui.selectable_value(
+                                        &mut self.direction,
+                                        Direction::Repaid,
+                                        "Repaid (I gave back)",
+                                    );
+                                });
+                            ui.end_row();
 
-                ui.label("Date:");
-                ui.add(egui_extras::DatePickerButton::new(&mut self.selected_date));
-                ui.end_row();
+                            ui.label(egui::RichText::new("📅 Date:").size(14.0));
+                            ui.add(egui_extras::DatePickerButton::new(&mut self.selected_date));
+                            ui.end_row();
 
-                ui.label("Time:");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut self.selected_hour).clamp_range(0..=23));
-                    ui.label(":");
-                    ui.add(egui::DragValue::new(&mut self.selected_minute).clamp_range(0..=59));
-                });
-                ui.end_row();
-
-                ui.label("Expected Return:");
-                ui.horizontal(|ui| {
-                    let can_set_expected =
-                        matches!(self.direction, Direction::Lent | Direction::Borrowed);
-
-                    if can_set_expected {
-                        ui.checkbox(&mut self.has_expected_return, "Set expected date");
-                        if self.has_expected_return {
-                            ui.add(egui_extras::DatePickerButton::new(
-                                &mut self.expected_return_date,
-                            ));
-                        }
-                    } else {
-                        ui.label("(Not applicable for returns/repayments)");
-                        self.has_expected_return = false;
-                    }
-                });
-                ui.end_row();
-            });
-
-        ui.add_space(10.0);
-
-        if ui.button("Add Transaction").clicked() {
-            if let Ok(amount) = self.amount.parse::<f64>() {
-                if !self.person_name.trim().is_empty() && amount > 0.0 {
-                    let time = NaiveTime::from_hms_opt(self.selected_hour, self.selected_minute, 0)
-                        .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
-                    let datetime = NaiveDateTime::new(self.selected_date, time);
-
-                    let transaction = Transaction {
-                        person: Person {
-                            name: self.person_name.trim().to_string(),
-                        },
-                        amount,
-                        money_type: self.money_type,
-                        direction: self.direction,
-                        datetime,
-                        expected_return_date: if self.has_expected_return {
-                            Some(self.expected_return_date)
-                        } else {
-                            None
-                        },
-                    };
-
-                    self.db.add_transaction(transaction);
-                    if let Err(e) = self.db.save() {
-                        self.status_message = format!("Error saving: {}", e);
-                    } else {
-                        self.status_message = "Transaction added successfully!".to_string();
-                        self.person_name.clear();
-                        self.amount.clear();
-                        self.has_expected_return = false;
-                    }
-                } else {
-                    self.status_message =
-                        "Invalid input: name required and amount must be positive".to_string();
-                }
-            } else {
-                self.status_message = "Invalid amount".to_string();
-            }
-        }
-
-        if !self.status_message.is_empty() {
-            ui.add_space(10.0);
-            ui.colored_label(egui::Color32::GREEN, &self.status_message);
-        }
-    }
-
-    fn show_analysis(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Financial Analysis");
-        ui.add_space(10.0);
-
-        if self.db.transactions.is_empty() {
-            ui.label("No transactions yet. Add some to see analysis!");
-            return;
-        }
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let mut balances_by_currency: HashMap<MoneyType, f64> = HashMap::new();
-            let mut total_lent = 0.0;
-            let mut total_borrowed = 0.0;
-            let mut total_returned = 0.0;
-            let mut total_repaid = 0.0;
-
-            for t in &self.db.transactions {
-                let balance = balances_by_currency.entry(t.money_type).or_insert(0.0);
-
-                match t.direction {
-                    Direction::Lent => {
-                        *balance -= t.amount;
-                        total_lent += t.amount;
-                    }
-                    Direction::Borrowed => {
-                        *balance += t.amount;
-                        total_borrowed += t.amount;
-                    }
-                    Direction::Returned => {
-                        *balance += t.amount;
-                        total_returned += t.amount;
-                    }
-                    Direction::Repaid => {
-                        *balance -= t.amount;
-                        total_repaid += t.amount;
-                    }
-                }
-            }
-
-            ui.group(|ui| {
-                ui.strong("Net Balance by Currency:");
-                for (currency, balance) in &balances_by_currency {
-                    let color = if *balance > 0.0 {
-                        egui::Color32::GREEN
-                    } else if *balance < 0.0 {
-                        egui::Color32::RED
-                    } else {
-                        egui::Color32::GRAY
-                    };
-                    ui.colored_label(color, format!("{}{:.2}", currency.symbol(), balance));
-                }
-            });
-
-            ui.add_space(15.0);
-
-            ui.collapsing("Transaction Distribution Chart", |ui| {
-                ui.add_space(5.0);
-                Plot::new("transaction_dist")
-                    .legend(Legend::default())
-                    .show_axes([false, true])
-                    .height(200.0)
-                    .show(ui, |plot_ui| {
-                        let bars = vec![
-                            Bar::new(0.0, total_lent)
-                                .name("Lent")
-                                .fill(egui::Color32::from_rgb(255, 100, 100)),
-                            Bar::new(1.0, total_borrowed)
-                                .name("Borrowed")
-                                .fill(egui::Color32::from_rgb(100, 150, 255)),
-                            Bar::new(2.0, total_returned)
-                                .name("Returned")
-                                .fill(egui::Color32::from_rgb(100, 200, 100)),
-                            Bar::new(3.0, total_repaid)
-                                .name("Repaid")
-                                .fill(egui::Color32::from_rgb(150, 255, 150)),
-                        ];
-                        plot_ui.bar_chart(BarChart::new(bars).width(0.7));
-                    });
-            });
-
-            ui.add_space(15.0);
-            ui.separator();
-
-            ui.heading("Per-Person Analysis");
-
-            let mut person_data: HashMap<String, PersonStats> = HashMap::new();
-
-            for t in &self.db.transactions {
-                let stats = person_data
-                    .entry(t.person.name.clone())
-                    .or_insert(PersonStats::default());
-
-                stats.currencies.insert(t.money_type);
-
-                match t.direction {
-                    Direction::Lent => {
-                        stats.lent += t.amount;
-                        stats.outstanding += t.amount;
-                        stats.lent_transactions.push(t.clone());
-                    }
-                    Direction::Borrowed => {
-                        stats.borrowed += t.amount;
-                        stats.outstanding -= t.amount;
-                    }
-                    Direction::Returned => {
-                        stats.returned += t.amount;
-                        stats.outstanding -= t.amount;
-                        stats.return_transactions.push(t.clone());
-                    }
-                    Direction::Repaid => {
-                        stats.repaid += t.amount;
-                        stats.outstanding += t.amount;
-                    }
-                }
-            }
-
-            let mut people: Vec<_> = person_data.iter().collect();
-            people.sort_by(|a, b| {
-                let a_reliability = if a.1.lent > 0.0 {
-                    a.1.returned / a.1.lent
-                } else {
-                    0.0
-                };
-                let b_reliability = if b.1.lent > 0.0 {
-                    b.1.returned / b.1.lent
-                } else {
-                    0.0
-                };
-
-                match b_reliability
-                    .partial_cmp(&a_reliability)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                {
-                    std::cmp::Ordering::Equal => a.0.cmp(b.0),
-                    other => other,
-                }
-            });
-
-            if !people.is_empty() {
-                ui.collapsing("Outstanding Balances by Person", |ui| {
-                    ui.add_space(5.0);
-                    Plot::new("outstanding_balances")
-                        .legend(Legend::default())
-                        .show_axes([false, true])
-                        .height(200.0)
-                        .show(ui, |plot_ui| {
-                            let bars: Vec<Bar> = people
-                                .iter()
-                                .enumerate()
-                                .map(|(i, (name, stats))| {
-                                    let color = if stats.outstanding > 0.0 {
-                                        egui::Color32::from_rgb(255, 100, 100)
-                                    } else if stats.outstanding < 0.0 {
-                                        egui::Color32::from_rgb(100, 200, 100)
-                                    } else {
-                                        egui::Color32::GRAY
-                                    };
-                                    Bar::new(i as f64, stats.outstanding)
-                                        .name(name.as_str())
-                                        .fill(color)
-                                })
-                                .collect();
-                            plot_ui.bar_chart(BarChart::new(bars).width(0.7));
-                        });
-                });
-
-                ui.add_space(15.0);
-            }
-
-            ui.heading("Individual Statistics");
-            ui.add_space(10.0);
-
-            let available_width = ui.available_width();
-            let card_width = 300.0;
-            let columns = (available_width / card_width).floor().max(1.0) as usize;
-
-            egui::Grid::new("people_grid")
-                .spacing([10.0, 10.0])
-                .num_columns(columns)
-                .show(ui, |ui| {
-                    for (idx, (name, stats)) in people.iter().enumerate() {
-                        ui.vertical(|ui| {
-                            ui.set_width(card_width - 20.0);
-                            ui.group(|ui| {
-                                ui.set_width(card_width - 30.0);
-                                ui.label(egui::RichText::new(name.as_str()).strong().size(16.0));
-                                ui.separator();
-
-                                let color = if stats.outstanding > 0.0 {
-                                    egui::Color32::RED
-                                } else if stats.outstanding < 0.0 {
-                                    egui::Color32::GREEN
-                                } else {
-                                    egui::Color32::GRAY
-                                };
-
-                                let currency_symbol = if stats.currencies.len() == 1 {
-                                    *stats.currencies.iter().next().unwrap()
-                                } else {
-                                    MoneyType::USD
-                                };
-                                ui.colored_label(
-                                    color,
-                                    format!("{}{:.2}", currency_symbol.symbol(), stats.outstanding),
+                            ui.label(egui::RichText::new("⏰ Time:").size(14.0));
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut self.selected_hour)
+                                        .clamp_range(0..=23),
                                 );
-                                ui.label(format!(
-                                    "Total Lent: {}{:.2}",
-                                    currency_symbol.symbol(),
-                                    stats.lent
-                                ));
-                                ui.label(format!(
-                                    "Total Returned: {}{:.2}",
-                                    currency_symbol.symbol(),
-                                    stats.returned
-                                ));
+                                ui.label(":");
+                                ui.add(
+                                    egui::DragValue::new(&mut self.selected_minute)
+                                        .clamp_range(0..=59),
+                                );
+                            });
+                            ui.end_row();
 
-                                if stats.lent > 0.0 {
-                                    let return_rate = (stats.returned / stats.lent) * 100.0;
-                                    ui.label(format!("Return Rate: {:.1}%", return_rate));
+                            ui.label(egui::RichText::new("📖 Expected Return:").size(14.0));
+                            ui.horizontal(|ui| {
+                                let can_set_expected =
+                                    matches!(self.direction, Direction::Lent | Direction::Borrowed);
 
-                                    if let Some(avg_days) = calculate_avg_return_time(
-                                        &stats.lent_transactions,
-                                        &stats.return_transactions,
-                                    ) {
-                                        ui.label(format!("Avg Return Time: {:.0} days", avg_days));
-                                    }
-
-                                    if let Some((kept, total)) = calculate_promise_keeping_rate(
-                                        &stats.lent_transactions,
-                                        &stats.return_transactions,
-                                    ) {
-                                        let rate = (kept as f64 / total as f64) * 100.0;
-                                        ui.label(format!(
-                                            "Promises Kept: {:.1}% ({}/{})",
-                                            rate, kept, total
+                                if can_set_expected {
+                                    ui.checkbox(&mut self.has_expected_return, "Set date");
+                                    if self.has_expected_return {
+                                        ui.add(egui_extras::DatePickerButton::new(
+                                            &mut self.expected_return_date,
                                         ));
                                     }
+                                } else {
+                                    ui.label(egui::RichText::new("(N/A)").weak());
+                                    self.has_expected_return = false;
                                 }
                             });
-                        });
-
-                        if (idx + 1) % columns == 0 {
                             ui.end_row();
+                        });
+                },
+            );
+
+            ui.add_space(20.0);
+
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new("✅ Add Transaction")
+                            .size(16.0)
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    )
+                    .fill(egui::Color32::from_rgb(100, 200, 100))
+                    .min_size([150.0, 45.0].into()),
+                )
+                .clicked()
+            {
+                if let Ok(amount) = self.amount.parse::<f64>() {
+                    if !self.person_name.trim().is_empty() && amount > 0.0 {
+                        let time =
+                            NaiveTime::from_hms_opt(self.selected_hour, self.selected_minute, 0)
+                                .unwrap_or_else(|| NaiveTime::from_hms_opt(0, 0, 0).unwrap());
+                        let datetime = NaiveDateTime::new(self.selected_date, time);
+
+                        let transaction = Transaction {
+                            person: Person {
+                                name: self.person_name.trim().to_string(),
+                            },
+                            amount,
+                            money_type: self.money_type,
+                            direction: self.direction,
+                            datetime,
+                            expected_return_date: if self.has_expected_return {
+                                Some(self.expected_return_date)
+                            } else {
+                                None
+                            },
+                        };
+
+                        self.db.add_transaction(transaction);
+                        if let Err(e) = self.db.save() {
+                            self.status_message = format!("❌ Error saving: {}", e);
+                        } else {
+                            self.status_message = "✅ Transaction added successfully!".to_string();
+                            self.person_name.clear();
+                            self.amount.clear();
+                            self.has_expected_return = false;
                         }
+                    } else {
+                        self.status_message =
+                            "⚠️ Invalid input: name required and amount must be positive"
+                                .to_string();
                     }
-                });
+                } else {
+                    self.status_message = "⚠️ Invalid amount".to_string();
+                }
+            }
+
+            if !self.status_message.is_empty() {
+                ui.add_space(15.0);
+                let color = if self.status_message.starts_with("✅") {
+                    egui::Color32::GREEN
+                } else if self.status_message.starts_with("❌") {
+                    egui::Color32::RED
+                } else {
+                    egui::Color32::YELLOW
+                };
+                ui.colored_label(color, egui::RichText::new(&self.status_message).size(14.0));
+            }
         });
     }
 
-    fn show_transactions(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Transaction History");
-        ui.add_space(10.0);
+    fn show_analysis(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(15.0);
+            ui.heading(
+                egui::RichText::new("Financial Analysis Dashboard")
+                    .size(24.0)
+                    .strong(),
+            );
+            ui.add_space(15.0);
+        });
 
         if self.db.transactions.is_empty() {
-            ui.label("No transactions yet.");
+            ui.vertical_centered(|ui| {
+                ui.add_space(50.0);
+                ui.heading("🔭 No transactions yet");
+                ui.label("Add some transactions to see detailed analysis!");
+            });
             return;
         }
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (i, t) in self.db.transactions.iter().enumerate().rev() {
-                ui.group(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(format!("#{}", self.db.transactions.len() - i));
-                        ui.separator();
-                        ui.label(&t.person.name);
-                        ui.separator();
-                        ui.label(format!("{}{:.2}", t.money_type.symbol(), t.amount));
-                        ui.separator();
-                        ui.label(format!("{:?}", t.direction));
-                        ui.separator();
-                        ui.label(format!("{:?}", t.money_type));
-                        ui.separator();
-                        ui.label(t.datetime.format("%Y-%m-%d %H:%M").to_string());
-                        if let Some(expected) = t.expected_return_date {
-                            ui.separator();
-                            ui.colored_label(
-                                egui::Color32::LIGHT_BLUE,
-                                format!("Expected: {}", expected.format("%Y-%m-%d")),
+        egui::ScrollArea::vertical()
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    let mut balances_by_currency: HashMap<MoneyType, f64> = HashMap::new();
+                    let mut total_lent = 0.0;
+                    let mut total_borrowed = 0.0;
+                    let mut total_returned = 0.0;
+                    let mut total_repaid = 0.0;
+
+                    for t in &self.db.transactions {
+                        let balance = balances_by_currency.entry(t.money_type).or_insert(0.0);
+
+                        match t.direction {
+                            Direction::Lent => {
+                                *balance -= t.amount;
+                                total_lent += t.amount;
+                            }
+                            Direction::Borrowed => {
+                                *balance += t.amount;
+                                total_borrowed += t.amount;
+                            }
+                            Direction::Returned => {
+                                *balance += t.amount;
+                                total_returned += t.amount;
+                            }
+                            Direction::Repaid => {
+                                *balance -= t.amount;
+                                total_repaid += t.amount;
+                            }
+                        }
+                    }
+
+                    ui.group(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(
+                                egui::RichText::new("💼 Net Balance by Currency")
+                                    .size(18.0)
+                                    .strong(),
                             );
+                            ui.add_space(10.0);
+
+                            let mut currencies: Vec<_> = balances_by_currency.iter().collect();
+                            currencies.sort_by_key(|a| std::cmp::Reverse(a.1.abs() as i64));
+
+                            for (currency, balance) in currencies {
+                                let color = if *balance > 0.0 {
+                                    egui::Color32::from_rgb(100, 200, 100)
+                                } else if *balance < 0.0 {
+                                    egui::Color32::from_rgb(255, 120, 120)
+                                } else {
+                                    egui::Color32::GRAY
+                                };
+                                ui.colored_label(
+                                    color,
+                                    egui::RichText::new(format!(
+                                        "{}{:.2}",
+                                        currency.symbol(),
+                                        balance
+                                    ))
+                                    .size(16.0)
+                                    .strong(),
+                                );
+                            }
+                        });
+                    });
+
+                    ui.add_space(25.0);
+
+                    ui.group(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(
+                                egui::RichText::new("📈 Transaction Summary")
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.add_space(15.0);
+
+                            let available_width = ui.available_width();
+
+                            Plot::new("transaction_summary")
+                                .legend(Legend::default().position(egui_plot::Corner::RightTop))
+                                .show_axes([true, true])
+                                .height(280.0)
+                                .allow_scroll(false)
+                                .width(available_width - 20.0)
+                                .show(ui, |plot_ui| {
+                                    let bars = vec![
+                                        Bar::new(0.0, total_lent)
+                                            .name("💸 Lent")
+                                            .fill(egui::Color32::from_rgb(255, 120, 120)),
+                                        Bar::new(1.0, total_borrowed)
+                                            .name("📥 Borrowed")
+                                            .fill(egui::Color32::from_rgb(120, 160, 255)),
+                                        Bar::new(2.0, total_returned)
+                                            .name("✅ Returned")
+                                            .fill(egui::Color32::from_rgb(120, 220, 120)),
+                                        Bar::new(3.0, total_repaid)
+                                            .name("💳 Repaid")
+                                            .fill(egui::Color32::from_rgb(200, 255, 150)),
+                                    ];
+                                    plot_ui.bar_chart(BarChart::new(bars).width(0.6));
+                                });
+                        });
+                    });
+
+                    ui.add_space(25.0);
+
+                    ui.group(|ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.heading(
+                                egui::RichText::new("📊 Balance Timeline")
+                                    .size(18.0)
+                                    .strong(),
+                            );
+                            ui.add_space(15.0);
+
+                            let available_width = ui.available_width();
+                            let timeline = self.generate_balance_timeline();
+
+                            Plot::new("balance_timeline")
+                                .legend(Legend::default())
+                                .show_axes([true, true])
+                                .height(280.0)
+                                .allow_scroll(false)
+                                .width(available_width - 20.0)
+                                .show(ui, |plot_ui| {
+                                    for (idx, (currency, points)) in timeline.iter().enumerate() {
+                                        let color = match idx {
+                                            0 => egui::Color32::from_rgb(255, 150, 100),
+                                            1 => egui::Color32::from_rgb(100, 150, 255),
+                                            2 => egui::Color32::from_rgb(150, 255, 100),
+                                            3 => egui::Color32::from_rgb(255, 200, 100),
+                                            _ => egui::Color32::GRAY,
+                                        };
+
+                                        let line = Line::new(points.clone())
+                                            .name(format!("{:?}", currency))
+                                            .stroke(egui::Stroke::new(2.5, color));
+                                        plot_ui.line(line);
+                                    }
+                                });
+                        });
+                    });
+
+                    ui.add_space(25.0);
+
+                    ui.separator();
+
+                    ui.add_space(15.0);
+                    ui.heading(
+                        egui::RichText::new("💥 Per-Person Analysis")
+                            .size(20.0)
+                            .strong(),
+                    );
+                    ui.add_space(15.0);
+
+                    ui.horizontal(|ui| {
+                        let margin = (ui.available_width() - 400.0) / 2.0;
+                        ui.add_space(margin);
+
+                        ui.label("🔍 Search person:");
+                        ui.text_edit_singleline(&mut self.search_query);
+                    });
+
+                    ui.add_space(10.0);
+
+                    let mut person_data: HashMap<String, PersonStats> = HashMap::new();
+
+                    for t in &self.db.transactions {
+                        let stats = person_data
+                            .entry(t.person.name.clone())
+                            .or_insert(PersonStats::default());
+
+                        stats.currencies.insert(t.money_type);
+
+                        match t.direction {
+                            Direction::Lent => {
+                                stats.lent += t.amount;
+                                stats.outstanding += t.amount;
+                                stats.lent_transactions.push(t.clone());
+                            }
+                            Direction::Borrowed => {
+                                stats.borrowed += t.amount;
+                                stats.outstanding -= t.amount;
+                            }
+                            Direction::Returned => {
+                                stats.returned += t.amount;
+                                stats.outstanding -= t.amount;
+                                stats.return_transactions.push(t.clone());
+                            }
+                            Direction::Repaid => {
+                                stats.repaid += t.amount;
+                                stats.outstanding += t.amount;
+                            }
+                        }
+                    }
+
+                    let mut people: Vec<_> = person_data.iter().collect();
+                    people.sort_by(|a, b| {
+                        let a_reliability = if a.1.lent > 0.0 {
+                            a.1.returned / a.1.lent
+                        } else {
+                            0.0
+                        };
+                        let b_reliability = if b.1.lent > 0.0 {
+                            b.1.returned / b.1.lent
+                        } else {
+                            0.0
+                        };
+
+                        match b_reliability
+                            .partial_cmp(&a_reliability)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                        {
+                            std::cmp::Ordering::Equal => a.0.cmp(b.0),
+                            other => other,
                         }
                     });
+
+                    people.retain(|(name, _)| {
+                        name.to_lowercase()
+                            .contains(&self.search_query.to_lowercase())
+                    });
+
+                    if !people.is_empty() {
+                        ui.group(|ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.heading(
+                                    egui::RichText::new("💰 Outstanding Balances")
+                                        .size(16.0)
+                                        .strong(),
+                                );
+                                ui.add_space(10.0);
+
+                                let available_width = ui.available_width();
+
+                                Plot::new("outstanding_balances")
+                                    .legend(Legend::default())
+                                    .show_axes([true, true])
+                                    .height(250.0)
+                                    .allow_scroll(false)
+                                    .width(available_width - 20.0)
+                                    .show(ui, |plot_ui| {
+                                        let bars: Vec<Bar> = people
+                                            .iter()
+                                            .enumerate()
+                                            .map(|(i, (name, stats))| {
+                                                let color = if stats.outstanding > 0.0 {
+                                                    egui::Color32::from_rgb(255, 130, 130)
+                                                } else if stats.outstanding < 0.0 {
+                                                    egui::Color32::from_rgb(130, 220, 130)
+                                                } else {
+                                                    egui::Color32::GRAY
+                                                };
+                                                Bar::new(i as f64, stats.outstanding)
+                                                    .name(name.as_str())
+                                                    .fill(color)
+                                            })
+                                            .collect();
+                                        plot_ui.bar_chart(BarChart::new(bars).width(0.7));
+                                    });
+                            });
+                        });
+
+                        ui.add_space(25.0);
+                    }
+
+                    ui.heading(
+                        egui::RichText::new("📋 Individual Statistics")
+                            .size(18.0)
+                            .strong(),
+                    );
+                    ui.add_space(15.0);
+
+                    let available_width = ui.available_width();
+                    let card_width = 380.0;
+                    let columns = ((available_width + 45.0) / (card_width + 10.0))
+                        .floor()
+                        .max(1.0) as usize;
+
+                    egui::Grid::new("people_grid")
+                        .spacing([15.0, 15.0])
+                        .num_columns(columns)
+                        .show(ui, |ui| {
+                            for (idx, (name, stats)) in people.iter().enumerate() {
+                                self.draw_person_card(ui, name, stats);
+
+                                if (idx + 1) % columns == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+
+                    ui.add_space(15.0);
                 });
+            });
+    }
+
+    fn draw_person_card(&self, ui: &mut egui::Ui, name: &str, stats: &PersonStats) {
+        ui.vertical(|ui| {
+            ui.set_width(360.0);
+            ui.group(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.set_min_height(225.0);
+                    ui.set_width(340.0);
+
+                    ui.label(egui::RichText::new(name).strong().size(16.0));
+                    ui.separator();
+
+                    let color = if stats.outstanding > 0.0 {
+                        egui::Color32::from_rgb(255, 130, 130)
+                    } else if stats.outstanding < 0.0 {
+                        egui::Color32::from_rgb(130, 220, 130)
+                    } else {
+                        egui::Color32::GRAY
+                    };
+
+                    let currency_symbol = if stats.currencies.len() == 1 {
+                        *stats.currencies.iter().next().unwrap()
+                    } else {
+                        MoneyType::USD
+                    };
+
+                    ui.colored_label(
+                        color,
+                        egui::RichText::new(format!(
+                            "{}{:.2}",
+                            currency_symbol.symbol(),
+                            stats.outstanding
+                        ))
+                        .strong()
+                        .size(18.0),
+                    );
+
+                    ui.add_space(10.0);
+                    ui.label(format!(
+                        "📤 Lent: {}{:.2}",
+                        currency_symbol.symbol(),
+                        stats.lent
+                    ));
+                    ui.label(format!(
+                        "📥 Borrowed: {}{:.2}",
+                        currency_symbol.symbol(),
+                        stats.borrowed
+                    ));
+                    ui.label(format!(
+                        "✅ Returned: {}{:.2}",
+                        currency_symbol.symbol(),
+                        stats.returned
+                    ));
+                    ui.label(format!(
+                        "💳 Repaid: {}{:.2}",
+                        currency_symbol.symbol(),
+                        stats.repaid
+                    ));
+
+                    if stats.lent > 0.0 {
+                        ui.add_space(12.0);
+                        let return_rate = (stats.returned / stats.lent) * 100.0;
+                        ui.colored_label(
+                            egui::Color32::LIGHT_BLUE,
+                            format!("Return Rate: {:.1}%", return_rate),
+                        );
+
+                        if let Some(avg_days) = calculate_avg_return_time(
+                            &stats.lent_transactions,
+                            &stats.return_transactions,
+                        ) {
+                            ui.label(format!("⏱️ Avg Return: {:.0} days", avg_days));
+                        } else {
+                            ui.label("⏱️ Avg Return: N/A");
+                        }
+
+                        if let Some((kept, total)) = calculate_promise_keeping_rate(
+                            &stats.lent_transactions,
+                            &stats.return_transactions,
+                        ) {
+                            let rate = (kept as f64 / total as f64) * 100.0;
+                            ui.colored_label(
+                                if rate >= 80.0 {
+                                    egui::Color32::GREEN
+                                } else {
+                                    egui::Color32::YELLOW
+                                },
+                                format!("🤝 Promises Kept: {:.1}% ({}/{})", rate, kept, total),
+                            );
+                        } else {
+                            ui.label("🤝 Promises Kept: N/A");
+                        }
+                    } else {
+                        ui.add_space(12.0);
+                        ui.label("Return Rate: N/A");
+                        ui.label("⏱️ Avg Return: N/A");
+                        ui.label("🤝 Promises Kept: N/A");
+                    }
+                });
+            });
+        });
+    }
+
+    fn generate_balance_timeline(&self) -> HashMap<MoneyType, Vec<[f64; 2]>> {
+        let mut result: HashMap<MoneyType, Vec<[f64; 2]>> = HashMap::new();
+        let mut balances: HashMap<MoneyType, f64> = HashMap::new();
+
+        let mut sorted_tx = self.db.transactions.clone();
+        sorted_tx.sort_by_key(|t| t.datetime);
+
+        for (idx, t) in sorted_tx.iter().enumerate() {
+            let balance = balances.entry(t.money_type).or_insert(0.0);
+
+            match t.direction {
+                Direction::Lent => *balance -= t.amount,
+                Direction::Borrowed => *balance += t.amount,
+                Direction::Returned => *balance += t.amount,
+                Direction::Repaid => *balance -= t.amount,
             }
+
+            result
+                .entry(t.money_type)
+                .or_insert_with(Vec::new)
+                .push([idx as f64, *balance]);
+        }
+
+        result
+    }
+
+    fn show_transactions(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(15.0);
+            ui.heading(
+                egui::RichText::new("Transaction History")
+                    .size(24.0)
+                    .strong(),
+            );
+            ui.add_space(15.0);
+
+            ui.horizontal(|ui| {
+                let margin = (ui.available_width() - 700.0) / 2.0;
+                ui.add_space(margin);
+
+                ui.label("🔍 Search:");
+                ui.text_edit_singleline(&mut self.search_query);
+
+                ui.separator();
+
+                ui.label("📌 Sort:");
+                egui::ComboBox::from_id_source("sort_by")
+                    .selected_text(match self.sort_by {
+                        SortBy::DateNewest => "📅 Date (Newest)",
+                        SortBy::DateOldest => "📅 Date (Oldest)",
+                        SortBy::AmountHighest => "💰 Amount (High)",
+                        SortBy::AmountLowest => "💰 Amount (Low)",
+                        SortBy::Person => "👤 Person",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.sort_by,
+                            SortBy::DateNewest,
+                            "📅 Date (Newest)",
+                        );
+                        ui.selectable_value(
+                            &mut self.sort_by,
+                            SortBy::DateOldest,
+                            "📅 Date (Oldest)",
+                        );
+                        ui.selectable_value(
+                            &mut self.sort_by,
+                            SortBy::AmountHighest,
+                            "💰 Amount (High)",
+                        );
+                        ui.selectable_value(
+                            &mut self.sort_by,
+                            SortBy::AmountLowest,
+                            "💰 Amount (Low)",
+                        );
+                        ui.selectable_value(&mut self.sort_by, SortBy::Person, "👤 Person");
+                    });
+            });
+
+            ui.add_space(10.0);
+        });
+
+        if self.db.transactions.is_empty() {
+            ui.horizontal_centered(|ui| {
+                ui.add_space(50.0);
+                ui.heading("📭 No transactions yet");
+            });
+            return;
+        }
+
+        ui.horizontal_centered(|ui| {
+            let max_width = 900.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(max_width, ui.available_height()),
+                egui::Layout::top_down(egui::Align::Center),
+                |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false; 2])
+                        .show(ui, |ui| {
+                            let mut filtered_txs: Vec<(usize, &Transaction)> = self
+                                .db
+                                .transactions
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, t)| {
+                                    let search_lower = self.search_query.to_lowercase();
+                                    t.person.name.to_lowercase().contains(&search_lower)
+                                        || format!("{:.2}", t.amount).contains(&search_lower)
+                                        || format!("{:?}", t.direction)
+                                            .to_lowercase()
+                                            .contains(&search_lower)
+                                })
+                                .collect();
+
+                            match self.sort_by {
+                                SortBy::DateNewest => {
+                                    filtered_txs.sort_by_key(|(_, t)| std::cmp::Reverse(t.datetime))
+                                }
+                                SortBy::DateOldest => filtered_txs.sort_by_key(|(_, t)| t.datetime),
+                                SortBy::AmountHighest => filtered_txs.sort_by(|a, b| {
+                                    b.1.amount
+                                        .partial_cmp(&a.1.amount)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                }),
+                                SortBy::AmountLowest => filtered_txs.sort_by(|a, b| {
+                                    a.1.amount
+                                        .partial_cmp(&b.1.amount)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                }),
+                                SortBy::Person => filtered_txs
+                                    .sort_by(|a, b| a.1.person.name.cmp(&b.1.person.name)),
+                            }
+
+                            for (i, t) in filtered_txs.iter().rev() {
+                                let color = match t.direction {
+                                    Direction::Lent => egui::Color32::from_rgb(255, 130, 130),
+                                    Direction::Borrowed => egui::Color32::from_rgb(120, 160, 255),
+                                    Direction::Returned => egui::Color32::from_rgb(120, 220, 120),
+                                    Direction::Repaid => egui::Color32::from_rgb(200, 255, 150),
+                                };
+
+                                ui.group(|ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.colored_label(
+                                            egui::Color32::GRAY,
+                                            format!("#{}", self.db.transactions.len() - i),
+                                        );
+                                        ui.separator();
+                                        ui.label(egui::RichText::new(&t.person.name).strong());
+                                        ui.separator();
+                                        ui.colored_label(
+                                            color,
+                                            egui::RichText::new(format!(
+                                                "{}{:.2}",
+                                                t.money_type.symbol(),
+                                                t.amount
+                                            ))
+                                            .strong(),
+                                        );
+                                        ui.separator();
+                                        ui.label(format!("{:?}", t.direction));
+                                        ui.separator();
+                                        ui.label(
+                                            egui::RichText::new(
+                                                t.datetime.format("%Y-%m-%d %H:%M").to_string(),
+                                            )
+                                            .weak(),
+                                        );
+
+                                        if let Some(expected) = t.expected_return_date {
+                                            ui.separator();
+                                            ui.colored_label(
+                                                egui::Color32::LIGHT_BLUE,
+                                                format!(
+                                                    "📅 Expected: {}",
+                                                    expected.format("%Y-%m-%d")
+                                                ),
+                                            );
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                },
+            );
         });
     }
 }

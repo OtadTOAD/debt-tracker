@@ -59,3 +59,12 @@ pub struct PersonStats {
     pub return_transactions: Vec<Transaction>,
     pub currencies: HashSet<MoneyType>,
 }
+
+#[derive(PartialEq, Clone, Copy)]
+pub enum SortBy {
+    DateNewest,
+    DateOldest,
+    AmountHighest,
+    AmountLowest,
+    Person,
+}

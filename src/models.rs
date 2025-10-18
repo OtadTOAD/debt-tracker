@@ -46,6 +46,7 @@ pub struct Transaction {
     pub direction: Direction,
     pub datetime: NaiveDateTime,
     pub expected_return_date: Option<NaiveDate>,
+    pub attachment_path: Option<String>,
 }
 
 #[derive(Default)]

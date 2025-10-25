@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::{
     database::Database,
-    models::{Direction, MoneyType, Person, PersonStats, SortBy, Transaction},
+    models::{DeadlineChange, Direction, MoneyType, Person, PersonStats, SortBy, Transaction},
 };
 
 #[derive(PartialEq)]
@@ -48,6 +48,9 @@ pub struct BankingApp {
     edit_transaction_index: Option<usize>,
     attachment_textures: HashMap<String, egui::TextureHandle>,
     viewing_attachment: Option<String>,
+
+    editing_deadline_for: Option<usize>,
+    temp_new_deadline: NaiveDate,
 }
 
 impl Default for BankingApp {
@@ -73,6 +76,8 @@ impl Default for BankingApp {
             edit_transaction_index: None,
             attachment_textures: HashMap::new(),
             viewing_attachment: None,
+            editing_deadline_for: None,
+            temp_new_deadline: now.date_naive(),
         }
     }
 }
@@ -432,6 +437,7 @@ impl BankingApp {
                                 None
                             },
                             attachment_path: stored_attachment,
+                            deadline_changes: Vec::new(),
                         };
 
                         self.db.add_transaction(transaction);
@@ -553,7 +559,7 @@ impl BankingApp {
                                         egui::Color32::from_rgb(255, 130, 130),
                                     ),
                                     (
-                                        "📥 Total Borrowed",
+                                        "🔥 Total Borrowed",
                                         total_borrowed,
                                         egui::Color32::from_rgb(120, 160, 255),
                                     ),
@@ -938,6 +944,8 @@ impl BankingApp {
 
             stats.currencies.insert(t.money_type);
 
+            stats.deadline_changes_count += t.deadline_changes.len();
+
             match t.direction {
                 Direction::Lent => {
                     stats.lent += t.amount;
@@ -968,7 +976,7 @@ impl BankingApp {
             ui.set_width(360.0);
             ui.group(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.set_min_height(225.0);
+                    ui.set_min_height(250.0);
                     ui.set_width(340.0);
 
                     ui.label(egui::RichText::new(name).strong().size(16.0));
@@ -1006,7 +1014,7 @@ impl BankingApp {
                         stats.lent
                     ));
                     ui.label(format!(
-                        "📥 Borrowed: {}{:.2}",
+                        "🔥 Borrowed: {}{:.2}",
                         currency_symbol.symbol(),
                         stats.borrowed
                     ));
@@ -1049,16 +1057,23 @@ impl BankingApp {
                                 } else {
                                     egui::Color32::YELLOW
                                 },
-                                format!("👌 Promises Kept: {:.1}% ({}/{})", rate, kept, total),
+                                format!("💌 Promises Kept: {:.1}% ({}/{})", rate, kept, total),
                             );
                         } else {
-                            ui.label("👌 Promises Kept: N/A");
+                            ui.label("💌 Promises Kept: N/A");
+                        }
+
+                        if stats.deadline_changes_count > 0 {
+                            ui.colored_label(
+                                egui::Color32::YELLOW,
+                                format!("🔄 Deadline Changes: {}", stats.deadline_changes_count),
+                            );
                         }
                     } else {
                         ui.add_space(12.0);
                         ui.label("Return Rate: N/A");
                         ui.label("⏱ Avg Return: N/A");
-                        ui.label("👌 Promises Kept: N/A");
+                        ui.label("💌 Promises Kept: N/A");
                     }
                 });
             });
@@ -1257,10 +1272,32 @@ impl BankingApp {
 
                                 if let Some(expected) = t.expected_return_date {
                                     ui.separator();
-                                    ui.colored_label(
-                                        egui::Color32::LIGHT_BLUE,
-                                        format!("📅 Expected: {}", expected.format("%Y-%m-%d")),
-                                    );
+
+                                    let deadline_color = if !t.deadline_changes.is_empty() {
+                                        egui::Color32::YELLOW
+                                    } else {
+                                        egui::Color32::LIGHT_BLUE
+                                    };
+
+                                    let deadline_text = if !t.deadline_changes.is_empty() {
+                                        format!(
+                                            "📅 Expected: {} ({}×)",
+                                            expected.format("%Y-%m-%d"),
+                                            t.deadline_changes.len()
+                                        )
+                                    } else {
+                                        format!("📅 Expected: {}", expected.format("%Y-%m-%d"))
+                                    };
+
+                                    ui.colored_label(deadline_color, deadline_text);
+
+                                    if matches!(t.direction, Direction::Lent | Direction::Borrowed)
+                                    {
+                                        if ui.small_button("📝").clicked() {
+                                            self.editing_deadline_for = Some(*i);
+                                            self.temp_new_deadline = expected;
+                                        }
+                                    }
                                 }
 
                                 if t.attachment_path.is_some() {
@@ -1292,7 +1329,7 @@ impl BankingApp {
                                 }
 
                                 ui.separator();
-                                if ui.small_button("✏️").clicked() {
+                                if ui.small_button("✏").clicked() {
                                     self.edit_transaction_index = Some(*i);
                                 }
                             });
@@ -1301,12 +1338,100 @@ impl BankingApp {
                 });
             });
 
+        if let Some(edit_idx) = self.editing_deadline_for {
+            let mut should_close = false;
+            let mut should_save = false;
+
+            egui::Window::new("📝 Change Deadline")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    if let Some(t) = self.db.transactions.get(edit_idx) {
+                        ui.label(format!("Changing deadline for: {}", t.person.name));
+                        ui.label(format!("Transaction #{}", edit_idx + 1));
+                        ui.separator();
+
+                        ui.add_space(10.0);
+
+                        if let Some(current_deadline) = t.expected_return_date {
+                            ui.label(format!(
+                                "Current deadline: {}",
+                                current_deadline.format("%Y-%m-%d")
+                            ));
+
+                            if !t.deadline_changes.is_empty() {
+                                ui.label(format!(
+                                    "Previously changed {} time(s)",
+                                    t.deadline_changes.len()
+                                ));
+                                ui.add_space(5.0);
+
+                                egui::CollapsingHeader::new("📜 Change History").show(ui, |ui| {
+                                    for (idx, change) in t.deadline_changes.iter().enumerate() {
+                                        ui.label(format!(
+                                            "{}. {} ➡ {} (changed on {})",
+                                            idx + 1,
+                                            change.old_date.format("%Y-%m-%d"),
+                                            change.new_date.format("%Y-%m-%d"),
+                                            change.changed_at.format("%Y-%m-%d %H:%M")
+                                        ));
+                                    }
+                                });
+                            }
+                        }
+
+                        ui.add_space(15.0);
+                        ui.label("New deadline:");
+                        ui.add(egui_extras::DatePickerButton::new(
+                            &mut self.temp_new_deadline,
+                        ));
+
+                        ui.add_space(15.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("💾 Save").clicked() {
+                                should_save = true;
+                                should_close = true;
+                            }
+                            if ui.button("❌ Cancel").clicked() {
+                                should_close = true;
+                            }
+                        });
+                    }
+                });
+
+            if should_save {
+                if let Some(t) = self.db.transactions.get_mut(edit_idx) {
+                    if let Some(old_deadline) = t.expected_return_date {
+                        if old_deadline != self.temp_new_deadline {
+                            let change = DeadlineChange {
+                                old_date: old_deadline,
+                                new_date: self.temp_new_deadline,
+                                changed_at: Local::now().naive_local(),
+                            };
+                            t.deadline_changes.push(change);
+                            t.expected_return_date = Some(self.temp_new_deadline);
+
+                            if let Err(e) = self.db.save() {
+                                self.status_message = format!("❌ Error saving: {}", e);
+                            } else {
+                                self.status_message = "✅ Deadline updated!".to_string();
+                            }
+                        }
+                    }
+                }
+            }
+
+            if should_close {
+                self.editing_deadline_for = None;
+            }
+        }
+
         if let Some(edit_idx) = self.edit_transaction_index {
             let mut should_close = false;
             let mut should_save = false;
             let mut new_attachment: Option<Option<String>> = None;
 
-            egui::Window::new("✏️ Edit Transaction")
+            egui::Window::new("✏ Edit Transaction")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {

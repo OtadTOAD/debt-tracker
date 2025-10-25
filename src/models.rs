@@ -39,6 +39,13 @@ pub enum Direction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadlineChange {
+    pub old_date: NaiveDate,
+    pub new_date: NaiveDate,
+    pub changed_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub person: Person,
     pub amount: f64,
@@ -47,6 +54,8 @@ pub struct Transaction {
     pub datetime: NaiveDateTime,
     pub expected_return_date: Option<NaiveDate>,
     pub attachment_path: Option<String>,
+    #[serde(default)]
+    pub deadline_changes: Vec<DeadlineChange>,
 }
 
 #[derive(Default)]
@@ -59,6 +68,7 @@ pub struct PersonStats {
     pub lent_transactions: Vec<Transaction>,
     pub return_transactions: Vec<Transaction>,
     pub currencies: HashSet<MoneyType>,
+    pub deadline_changes_count: usize,
 }
 
 #[derive(PartialEq, Clone, Copy)]
